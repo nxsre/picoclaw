@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/providers"
 )
@@ -792,6 +793,56 @@ func TestTruncateHistory_StaleMetaCount(t *testing.T) {
 	}
 	if history[3].Content != "orphan" {
 		t.Errorf("last kept = %q, want 'orphan'", history[3].Content)
+	}
+}
+
+func TestTruncateHistory_IgnoresTransientThoughtForKeepLast(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	sessionKey := "transient-keep-last"
+	now := time.Now()
+
+	rawJSONL := strings.Join([]string{
+		`{"role":"user","content":"a"}`,
+		`{"role":"assistant","content":"b"}`,
+		`{"role":"assistant","content":"","reasoning_content":"dangling thought"}`,
+		`{"role":"user","content":"c"}`,
+		`{"role":"assistant","content":"d"}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(store.jsonlPath(sessionKey), []byte(rawJSONL), 0o644); err != nil {
+		t.Fatalf("WriteFile(jsonl): %v", err)
+	}
+	if err := store.writeMeta(sessionKey, SessionMeta{
+		Key:       sessionKey,
+		Count:     5,
+		Skip:      0,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("writeMeta: %v", err)
+	}
+
+	if err := store.TruncateHistory(ctx, sessionKey, 2); err != nil {
+		t.Fatalf("TruncateHistory: %v", err)
+	}
+
+	history, err := store.GetHistory(ctx, sessionKey)
+	if err != nil {
+		t.Fatalf("GetHistory: %v", err)
+	}
+	if len(history) != 2 {
+		t.Fatalf("expected 2 retained messages, got %d", len(history))
+	}
+	if history[0].Content != "c" || history[1].Content != "d" {
+		t.Fatalf("kept history = %+v, want c,d", history)
+	}
+
+	meta, err := store.readMeta(sessionKey)
+	if err != nil {
+		t.Fatalf("readMeta: %v", err)
+	}
+	if meta.Skip != 2 {
+		t.Fatalf("meta.Skip = %d, want 2 raw lines skipped", meta.Skip)
 	}
 }
 

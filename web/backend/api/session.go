@@ -155,6 +155,9 @@ func (h *Handler) readSessionMessages(path string, skip int) ([]providers.Messag
 		if err := json.Unmarshal(line, &msg); err != nil {
 			continue
 		}
+		if messageutil.IsTransientAssistantThoughtMessage(msg) {
+			continue
+		}
 		msgs = append(msgs, msg)
 	}
 	if err := scanner.Err(); err != nil {

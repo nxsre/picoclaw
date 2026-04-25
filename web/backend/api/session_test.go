@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sipeed/picoclaw/pkg/config"
 	"github.com/sipeed/picoclaw/pkg/memory"
@@ -98,6 +99,64 @@ func TestHandleListSessions_JSONLStorage(t *testing.T) {
 	}
 	if items[0].Preview != "Explain why the history API is empty after migration." {
 		t.Fatalf("items[0].Preview = %q", items[0].Preview)
+	}
+}
+
+func TestHandleListSessions_TransientThoughtDoesNotInflateMessageCount(t *testing.T) {
+	configPath, cleanup := setupOAuthTestEnv(t)
+	defer cleanup()
+
+	dir := sessionsTestDir(t, configPath)
+	sessionKey := legacyPicoSessionPrefix + "history-jsonl-transient"
+	base := filepath.Join(dir, sanitizeSessionKey(sessionKey))
+	now := time.Now().UTC()
+
+	rawJSONL := strings.Join([]string{
+		`{"role":"user","content":"keep me"}`,
+		`{"role":"assistant","content":"","reasoning_content":"dangling thought"}`,
+		`{"role":"assistant","content":"and me"}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(base+".jsonl", []byte(rawJSONL), 0o644); err != nil {
+		t.Fatalf("WriteFile(jsonl) error = %v", err)
+	}
+	metaData, err := json.Marshal(memory.SessionMeta{
+		Key:       sessionKey,
+		Count:     3,
+		Skip:      0,
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatalf("Marshal(meta) error = %v", err)
+	}
+	if err := os.WriteFile(base+".meta.json", metaData, 0o644); err != nil {
+		t.Fatalf("WriteFile(meta) error = %v", err)
+	}
+
+	h := NewHandler(configPath)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions", nil)
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var items []sessionListItem
+	if err := json.Unmarshal(rec.Body.Bytes(), &items); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len(items) = %d, want 1", len(items))
+	}
+	if items[0].ID != "history-jsonl-transient" {
+		t.Fatalf("items[0].ID = %q, want %q", items[0].ID, "history-jsonl-transient")
+	}
+	if items[0].MessageCount != 2 {
+		t.Fatalf("items[0].MessageCount = %d, want 2 after dropping transient thought", items[0].MessageCount)
 	}
 }
 
