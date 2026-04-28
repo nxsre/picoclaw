@@ -3,6 +3,7 @@
 package hardwaretools
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -95,12 +96,20 @@ func serialListPorts() ([]serialPortInfo, error) {
 	return ports, nil
 }
 
-func serialRead(cfg serialConfig, length int, timeout time.Duration) ([]byte, error) {
+func serialRead(ctx context.Context, cfg serialConfig, length int, timeout time.Duration) ([]byte, error) {
+	if err := serialContextErr(ctx); err != nil {
+		return nil, err
+	}
+
 	handle, err := openAndConfigureWindowsSerial(cfg, timeout)
 	if err != nil {
 		return nil, err
 	}
 	defer windows.CloseHandle(handle)
+
+	if err := serialContextErr(ctx); err != nil {
+		return nil, err
+	}
 
 	buf := make([]byte, length)
 	var read uint32
@@ -110,12 +119,20 @@ func serialRead(cfg serialConfig, length int, timeout time.Duration) ([]byte, er
 	return buf[:read], nil
 }
 
-func serialWrite(cfg serialConfig, data []byte, timeout time.Duration) (int, error) {
+func serialWrite(ctx context.Context, cfg serialConfig, data []byte, timeout time.Duration) (int, error) {
+	if err := serialContextErr(ctx); err != nil {
+		return 0, err
+	}
+
 	handle, err := openAndConfigureWindowsSerial(cfg, timeout)
 	if err != nil {
 		return 0, err
 	}
 	defer windows.CloseHandle(handle)
+
+	if err := serialContextErr(ctx); err != nil {
+		return 0, err
+	}
 
 	var written uint32
 	if err := windows.WriteFile(handle, data, &written, nil); err != nil {

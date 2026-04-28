@@ -1,6 +1,7 @@
 package hardwaretools
 
 import (
+	"context"
 	"runtime"
 	"strings"
 	"testing"
@@ -90,6 +91,41 @@ func TestValidateSerialBaud(t *testing.T) {
 				t.Fatalf("validateSerialBaud(%d) error = %v, wantErr %v", tt.baud, err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestSerialReadCanceledBeforeOpen(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	port := "/dev/ttyUSB0"
+	if runtime.GOOS == "windows" {
+		port = "COM3"
+	}
+
+	_, err := serialRead(ctx, serialConfig{Port: port, Baud: 115200, DataBits: 8, Parity: "none", StopBits: 1}, 1, time.Second)
+	if err == nil || !strings.Contains(err.Error(), context.Canceled.Error()) {
+		t.Fatalf("serialRead() error = %v, want context canceled", err)
+	}
+}
+
+func TestSerialWriteCanceledBeforeOpen(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	port := "/dev/ttyUSB0"
+	if runtime.GOOS == "windows" {
+		port = "COM3"
+	}
+
+	_, err := serialWrite(
+		ctx,
+		serialConfig{Port: port, Baud: 115200, DataBits: 8, Parity: "none", StopBits: 1},
+		[]byte("AT"),
+		time.Second,
+	)
+	if err == nil || !strings.Contains(err.Error(), context.Canceled.Error()) {
+		t.Fatalf("serialWrite() error = %v, want context canceled", err)
 	}
 }
 

@@ -3,6 +3,7 @@
 package hardwaretools
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,14 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+)
+
+var (
+	unixSerialNow       = time.Now
+	unixSerialOpenPort  = openAndConfigureSerialPort
+	unixSerialClosePort = unix.Close
+	unixSerialPollRead  = pollRead
+	unixSerialPollWrite = pollWrite
 )
 
 func serialListPorts() ([]serialPortInfo, error) {
@@ -52,29 +61,37 @@ func serialListPorts() ([]serialPortInfo, error) {
 	return ports, nil
 }
 
-func serialRead(cfg serialConfig, length int, timeout time.Duration) ([]byte, error) {
-	fd, err := openAndConfigureSerialPort(cfg)
+func serialRead(ctx context.Context, cfg serialConfig, length int, timeout time.Duration) ([]byte, error) {
+	if err := serialContextErr(ctx); err != nil {
+		return nil, err
+	}
+
+	fd, err := unixSerialOpenPort(cfg)
 	if err != nil {
 		return nil, err
 	}
-	defer unix.Close(fd)
+	defer unixSerialClosePort(fd)
 
 	buf := make([]byte, length)
 	total := 0
-	deadline := time.Now().Add(timeout)
+	deadline := unixSerialNow().Add(timeout)
 
 	for total < length {
-		remaining := time.Until(deadline)
+		if err := serialContextErr(ctx); err != nil {
+			return nil, err
+		}
+
+		remaining := deadline.Sub(unixSerialNow())
 		if remaining <= 0 {
 			break
 		}
 
-		n, err := pollRead(fd, buf[total:], remaining)
+		n, err := unixSerialPollRead(fd, buf[total:], minSerialPollTimeout(remaining))
 		if err != nil {
 			return nil, err
 		}
 		if n == 0 {
-			break
+			continue
 		}
 		total += n
 	}
@@ -82,27 +99,35 @@ func serialRead(cfg serialConfig, length int, timeout time.Duration) ([]byte, er
 	return buf[:total], nil
 }
 
-func serialWrite(cfg serialConfig, data []byte, timeout time.Duration) (int, error) {
-	fd, err := openAndConfigureSerialPort(cfg)
+func serialWrite(ctx context.Context, cfg serialConfig, data []byte, timeout time.Duration) (int, error) {
+	if err := serialContextErr(ctx); err != nil {
+		return 0, err
+	}
+
+	fd, err := unixSerialOpenPort(cfg)
 	if err != nil {
 		return 0, err
 	}
-	defer unix.Close(fd)
+	defer unixSerialClosePort(fd)
 
 	total := 0
-	deadline := time.Now().Add(timeout)
+	deadline := unixSerialNow().Add(timeout)
 	for total < len(data) {
-		remaining := time.Until(deadline)
+		if err := serialContextErr(ctx); err != nil {
+			return total, err
+		}
+
+		remaining := deadline.Sub(unixSerialNow())
 		if remaining <= 0 {
 			return total, fmt.Errorf("timeout while writing serial data")
 		}
 
-		n, err := pollWrite(fd, data[total:], remaining)
+		n, err := unixSerialPollWrite(fd, data[total:], minSerialPollTimeout(remaining))
 		if err != nil {
 			return total, err
 		}
 		if n == 0 {
-			return total, fmt.Errorf("serial port accepted zero bytes")
+			continue
 		}
 		total += n
 	}
@@ -251,4 +276,11 @@ func durationToPollTimeout(timeout time.Duration) int {
 		return 1
 	}
 	return ms
+}
+
+func minSerialPollTimeout(timeout time.Duration) time.Duration {
+	if timeout > serialPollInterval {
+		return serialPollInterval
+	}
+	return timeout
 }

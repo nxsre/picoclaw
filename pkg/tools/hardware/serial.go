@@ -19,6 +19,7 @@ const (
 	defaultSerialTimeoutMS = 1000
 	maxSerialPayloadBytes  = 4096
 	maxSerialReadBytes     = 4096
+	serialPollInterval     = 100 * time.Millisecond
 )
 
 var (
@@ -123,9 +124,9 @@ func (t *SerialTool) Execute(ctx context.Context, args map[string]any) *ToolResu
 	case "list":
 		return t.list()
 	case "read":
-		return t.read(args)
+		return t.read(ctx, args)
 	case "write":
-		return t.write(args)
+		return t.write(ctx, args)
 	default:
 		return ErrorResult(fmt.Sprintf("unknown action: %s (valid: list, read, write)", action))
 	}
@@ -147,7 +148,7 @@ func (t *SerialTool) list() *ToolResult {
 	return SilentResult(string(result))
 }
 
-func (t *SerialTool) read(args map[string]any) *ToolResult {
+func (t *SerialTool) read(ctx context.Context, args map[string]any) *ToolResult {
 	cfg, errResult := parseSerialConfig(args)
 	if errResult != nil {
 		return errResult
@@ -166,7 +167,7 @@ func (t *SerialTool) read(args map[string]any) *ToolResult {
 		return errResult
 	}
 
-	data, err := serialRead(cfg, length, timeout)
+	data, err := serialRead(ctx, cfg, length, timeout)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("serial read failed on %s: %v", cfg.Port, err))
 	}
@@ -174,7 +175,7 @@ func (t *SerialTool) read(args map[string]any) *ToolResult {
 	return SilentResult(formatSerialPayload("read", cfg, data, timeout))
 }
 
-func (t *SerialTool) write(args map[string]any) *ToolResult {
+func (t *SerialTool) write(ctx context.Context, args map[string]any) *ToolResult {
 	confirm, _ := args["confirm"].(bool)
 	if !confirm {
 		return ErrorResult(
@@ -195,7 +196,7 @@ func (t *SerialTool) write(args map[string]any) *ToolResult {
 		return errResult
 	}
 
-	written, err := serialWrite(cfg, payload, timeout)
+	written, err := serialWrite(ctx, cfg, payload, timeout)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("serial write failed on %s: %v", cfg.Port, err))
 	}
@@ -402,4 +403,13 @@ func validateSerialBaud(baud int) error {
 	}
 
 	return nil
+}
+
+func serialContextErr(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		return nil
+	}
 }
